@@ -1,0 +1,173 @@
+// upload to NXT:
+// nbc -v=131 -d kajzer2_v1.1.nxc
+
+// NBC on linux: https://forums.raspberrypi.com/viewtopic.php?t=16750
+
+#define US_LEFT     S3
+#define US_RIGHT    S4
+
+#define M_LEFT      OUT_C
+#define M_RIGHT     OUT_B
+#define M_MID       OUT_A
+
+#define min(a, b)   (a < b ? a : b)
+#define max(a, b)   (a > b ? a : b)
+
+#define MAX_DIST    60
+
+#define KP          300
+#define KI          10
+
+// ------------------------------------------------------------------------
+
+int prevError = 0;
+int distLeft = 0;
+int distRight = 0;
+int enemyAngle = 0;
+int lastEnemyAngle = 0;
+bool atack = false;
+
+// ------------------------------------------------------------------------
+
+sub drive(int error) {
+    int x = -(KP * error + KI * (error + prevError)) / 100;
+    prevError = error;
+
+    int leftSpeed = x;
+    int rightSpeed = -x;
+
+    if (atack) {
+        OnRev(M_LEFT, 100 - leftSpeed);
+        OnRev(M_RIGHT, 100 - rightSpeed);
+        OnRev(M_MID, 100);        
+    } else {
+        OnRev(M_LEFT, leftSpeed);
+        OnRev(M_RIGHT, rightSpeed);
+        Float(M_MID);
+        //OnRev(M_MID, max(leftSpeed, rightSpeed));
+    }
+}
+
+// ------------------------------------------------------------------------
+
+task scan() {
+    while (true) {
+        // US_CMD_SINGLESHOT
+        // US_CMD_CONTINUOUS
+
+        WriteI2CRegister(US_LEFT, I2C_ADDR_DEFAULT, I2C_REG_CMD, US_CMD_SINGLESHOT);
+        int sl = SensorUS(US_LEFT);
+
+        WriteI2CRegister(US_RIGHT, I2C_ADDR_DEFAULT, I2C_REG_CMD, US_CMD_SINGLESHOT);
+        int sr = SensorUS(US_RIGHT);
+
+        distLeft = min(sl, MAX_DIST);
+        distRight = min(sr, MAX_DIST);
+
+        int distMin = min(distLeft, distRight);
+        int distMax = max(distLeft, distRight);
+
+        lastEnemyAngle = enemyAngle;
+        enemyAngle = ((distLeft - distRight) * 2 * distMin) / MAX_DIST;
+        enemyAngle = max(min(enemyAngle, 30), -30);
+
+        if (distLeft == MAX_DIST && distRight == MAX_DIST) {
+            enemyAngle = lastEnemyAngle > 0 ? 30 : -30;
+        }
+
+        atack = (abs(enemyAngle) < 10);
+        
+    }        
+}
+
+task control() {
+    // run
+
+    while (true) {
+        
+        bool enemyVisible = distLeft < MAX_DIST || distRight < MAX_DIST;
+
+        if (enemyVisible) {
+            PlayToneEx(10 * (MAX_DIST - enemyAngle + 1), 10, 1, true);
+        } else {
+            PlayToneEx(0, 10, 0, true);
+        }
+
+        // drive
+
+        drive(enemyAngle);
+
+    }
+}
+
+task display() {
+    while (true) {
+        TextOut(0, LCD_LINE1, "Kajzer2 m-sumo", true);
+        TextOut(8, LCD_LINE3, "left  = " + NumToStr(distLeft), false);
+        TextOut(8, LCD_LINE4, "right = " + NumToStr(distRight), false);
+        TextOut(8, LCD_LINE5, "angle = " + NumToStr(enemyAngle), false);
+
+        Wait(100);
+    }
+}
+
+task main() {
+    // setup
+
+    SetSensorUltrasonic(US_LEFT);
+    SetSensorUltrasonic(US_RIGHT);
+
+    WriteI2CRegister(US_LEFT, I2C_ADDR_DEFAULT, I2C_REG_CMD, US_CMD_CONTINUOUS);
+
+    WriteI2CRegister(US_RIGHT, I2C_ADDR_DEFAULT, I2C_REG_CMD, US_CMD_CONTINUOUS);
+
+
+    PlayFile("attention.rso");
+    Wait(1000);
+    
+    while(true) {
+
+        int sl = SensorUS(US_LEFT);
+        int sr = SensorUS(US_RIGHT);
+        
+        if (sl < 10) {
+           enemyAngle = -30;
+           PlayFile("left.rso");
+           Wait(500);
+        }
+        
+        if (sr < 10 || enemyAngle == 0) {
+           enemyAngle = 30;
+           PlayFile("right.rso");
+           Wait(500);
+        }
+
+        TextOut(0, LCD_LINE1, "Kajzer2 m-sumo", true);
+        TextOut(0, LCD_LINE3, "enemyAngle = " + NumToStr(enemyAngle), false);
+        TextOut(0, LCD_LINE4, "Press to start", false);
+
+        if (ButtonPressed(BTNCENTER)) {
+           break;
+        }
+
+    }
+
+
+    int play = 500;
+    int wait = 980;
+
+    PlayTone(440, play);
+    Wait(wait);
+    PlayTone(480, play);
+    Wait(wait);
+    PlayTone(520, play);
+    Wait(wait);
+    PlayTone(560, play);
+    Wait(wait);
+    PlayTone(600, play);
+    Wait(wait);
+    PlayTone(660, play);
+
+
+    Precedes(scan, control, display);
+}
